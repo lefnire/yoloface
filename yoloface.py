@@ -30,7 +30,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model-cfg', type=str, default='./cfg/yolov3-face.cfg',
                     help='path to config file')
 parser.add_argument('--model-weights', type=str,
-                    default='./model-weights/yolov3-wider_16000.weights',
+                    default='./model-weights/yoloface.weights',
                     help='path to weights of model')
 parser.add_argument('--image', type=str, default='',
                     help='path to image file')
@@ -67,7 +67,7 @@ net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
 
 def _main():
     wind_name = 'face detection using YOLOv3'
-    cv2.namedWindow(wind_name, cv2.WINDOW_NORMAL)
+    # cv2.namedWindow(wind_name, cv2.WINDOW_NORMAL)
 
     output_file = ''
 
@@ -137,7 +137,7 @@ def _main():
         else:
             video_writer.write(frame.astype(np.uint8))
 
-        cv2.imshow(wind_name, frame)
+        # cv2.imshow(wind_name, frame)
 
         key = cv2.waitKey(1)
         if key == 27 or key == ord('q'):

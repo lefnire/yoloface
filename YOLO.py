@@ -15,6 +15,7 @@ import os
 import colorsys
 import numpy as np
 import cv2
+import pdb
 
 from yolo.model import eval
 from yolo.utils import letterbox_image
@@ -23,6 +24,9 @@ from keras import backend as K
 from keras.models import load_model
 from timeit import default_timer as timer
 from PIL import ImageDraw, Image
+
+import tensorflow as tf
+from tensorflow.python.framework import graph_io
 
 
 class YOLO(object):
@@ -54,8 +58,7 @@ class YOLO(object):
 
     def _generate(self):
         model_path = os.path.expanduser(self.model_path)
-        assert model_path.endswith(
-            '.h5'), 'Keras model or weights must be a .h5 file'
+        assert model_path.endswith('.h5'), 'Keras model or weights must be a .h5 file'
 
         # Load model, or construct model and load weights
         num_anchors = len(self.anchors)
@@ -124,6 +127,19 @@ class YOLO(object):
                 self.input_image_shape: [image.size[1], image.size[0]],
                 K.learning_phase(): 0
             })
+
+        # output_nodes = ['concat_1']
+        # output_nodes = [self.boxes.name, self.scores.name, self.classes.name]
+        output_nodes = ['Reshape_3', 'Reshape_9', 'Reshape_15']
+        frozen = tf.graph_util.convert_variables_to_constants(self.sess, self.sess.graph_def, output_nodes)
+        graph_io.write_graph(frozen, './', 'yolo_v3.pb', as_text=False)
+        # graph_io.write_graph(frozen, './', 'yolo_v3.pbtxt', as_text=True)
+
+        writer = tf.summary.FileWriter("./tf_logs", graph_def=self.sess.graph_def)
+        writer.flush()
+
+        exit(0)
+
 
         print('[i] ==> Found {} face(s) for this image'.format(len(out_boxes)))
         thickness = (image.size[0] + image.size[1]) // 400
@@ -231,8 +247,8 @@ def detect_video(model, video_path=None, output=None):
                 cv2.putText(result, text, (10, (i * 20) + 20),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.3, (10, 175, 0), 1)
 
-            cv2.namedWindow("face", cv2.WINDOW_NORMAL)
-            cv2.imshow("face", result)
+            #cv2.namedWindow("face", cv2.WINDOW_NORMAL)
+            # cv2.imshow("face", result)
             if isOutput:
                 out.write(result)
             if cv2.waitKey(1) & 0xFF == ord('q'):
