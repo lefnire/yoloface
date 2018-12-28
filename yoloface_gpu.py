@@ -25,6 +25,7 @@ def get_args():
                         help='path to the video')
     parser.add_argument('--output', type=str, default='outputs/',
                         help='image/video output path')
+    parser.add_argument('--vino', action='store_true', help='use openvino IR')
     args = parser.parse_args()
     return args
 

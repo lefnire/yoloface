@@ -19,6 +19,7 @@ import pdb
 
 from yolo.model import eval
 from yolo.utils import letterbox_image
+from facedet_models import OpenVINO_YOLO
 
 from keras import backend as K
 from keras.models import load_model
@@ -40,6 +41,7 @@ class YOLO(object):
         self.sess = K.get_session()
         self.boxes, self.scores, self.classes = self._generate()
         self.model_image_size = args.img_size
+        self.vino = args.vino
 
     def _get_class(self):
         classes_path = os.path.expanduser(self.classes_path)
@@ -63,19 +65,21 @@ class YOLO(object):
         # Load model, or construct model and load weights
         num_anchors = len(self.anchors)
         num_classes = len(self.class_names)
-        try:
-            self.yolo_model = load_model(model_path, compile=False)
-        except:
-            # make sure model, anchors and classes match
-            self.yolo_model.load_weights(self.model_path)
+        if self.vino:
+            self.yolo_model = OpenVINO_YOLO(self.args)
         else:
-            assert self.yolo_model.layers[-1].output_shape[-1] == \
-                   num_anchors / len(self.yolo_model.output) * (
-                           num_classes + 5), \
-                'Mismatch between model and given anchor and class sizes'
+            try:
+                self.yolo_model = load_model(model_path, compile=False)
+            except:
+                # make sure model, anchors and classes match
+                self.yolo_model.load_weights(self.model_path)
+            else:
+                assert self.yolo_model.layers[-1].output_shape[-1] == \
+                       num_anchors / len(self.yolo_model.output) * (
+                               num_classes + 5), \
+                    'Mismatch between model and given anchor and class sizes'
 
-        print(
-            '[i] ==> {} model, anchors, and classes loaded.'.format(model_path))
+        print('[i] ==> {} model, anchors, and classes loaded.'.format(model_path))
 
         # Generate colors for drawing bounding boxes
         hsv_tuples = [(x / len(self.class_names), 1., 1.)
@@ -103,10 +107,8 @@ class YOLO(object):
         start_time = timer()
 
         if self.model_image_size != (None, None):
-            assert self.model_image_size[
-                       0] % 32 == 0, 'Multiples of 32 required'
-            assert self.model_image_size[
-                       1] % 32 == 0, 'Multiples of 32 required'
+            assert self.model_image_size[0] % 32 == 0, 'Multiples of 32 required'
+            assert self.model_image_size[1] % 32 == 0, 'Multiples of 32 required'
             boxed_image = letterbox_image(image, tuple(
                 reversed(self.model_image_size)))
         else:
