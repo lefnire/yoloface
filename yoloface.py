@@ -12,99 +12,203 @@
 #
 # *******************************************************************
 
-# Usage example:  python yoloface.py --image samples/outside_000001.jpg \
-#                                    --output-dir outputs/
-#                 python yoloface.py --video samples/subway.mp4 \
-#                                    --output-dir outputs/
-#                 python yoloface.py --src 1 --output-dir outputs/
+
+import argparse, sys, os, colorsys, cv2, pdb
+import numpy as np
+from models.yoloface.utils import *
+from models.model import Model
+from PIL import Image
+
+from models.yoloface.model import eval
+
+from keras import backend as K
+from keras.models import load_model
+from timeit import default_timer as timer
+from PIL import ImageDraw, Image
+
+class Yoloface_Model(Model):
+    def __init__(self, args):
+        args.model_cfg = 'models/yoloface/cfg/yolov3-face.cfg'
+        super().__init__(args)
 
 
-import argparse
-import sys
-import os
+class Yoloface_GPU(Yoloface_Model):
+    devices = ['GPU']
 
-from utils import *
+    def __init__(self, args):
+        args.model_weights = 'models/yoloface/model-weights/YOLO_Face.h5'
+        args.anchors = 'models/yoloface/cfg/yolo_anchors.txt'  # path to anchor definitions
+        args.classes = 'models/yoloface/cfg/face_classes.txt'  # path to class definitions'
+        args.score = 0.5  # the score threshold
+        args.iou = 0.45  # the iou threshold
+        args.img_size = (416, 416)  # input image size
+        args.image = False  # image detection mode
+        args.video = 'samples/subway.mp4'  # path to the video
+        args.output = 'outputs/'  # image/video output path
 
-#####################################################################
-parser = argparse.ArgumentParser()
-parser.add_argument('--model-cfg', type=str, default='./cfg/yolov3-face.cfg',
-                    help='path to config file')
-parser.add_argument('--model-weights', type=str,
-                    default='./model-weights/yolov3-wider_16000.weights',
-                    help='path to weights of model')
-parser.add_argument('--image', type=str, default='',
-                    help='path to image file')
-parser.add_argument('--video', type=str, default='',
-                    help='path to video file')
-parser.add_argument('--src', type=int, default=0,
-                    help='source of the camera')
-parser.add_argument('--output-dir', type=str, default='outputs/',
-                    help='path to the output directory')
-args = parser.parse_args()
+        # FIXME
+        self.args = args
+        self.model_path = args.model_weights
+        self.classes_path = args.classes
+        self.anchors_path = args.anchors
+        self.class_names = self._get_class()
+        self.anchors = self._get_anchors()
+        self.sess = K.get_session()
+        self.boxes, self.scores, self.classes = self._generate()
+        self.model_image_size = args.img_size
 
-#####################################################################
-# print the arguments
-print('----- info -----')
-print('[i] The config file: ', args.model_cfg)
-print('[i] The weights of model file: ', args.model_weights)
-print('[i] Path to image file: ', args.image)
-print('[i] Path to video file: ', args.video)
-print('###########################################################\n')
+        super().__init__(args)
 
-# check outputs directory
-if not os.path.exists(args.output_dir):
-    print('==> Creating the {} directory...'.format(args.output_dir))
-    os.makedirs(args.output_dir)
-else:
-    print('==> Skipping create the {} directory...'.format(args.output_dir))
+    def _get_class(self):
+        classes_path = os.path.expanduser(self.classes_path)
+        with open(classes_path) as f:
+            class_names = f.readlines()
+        class_names = [c.strip() for c in class_names]
+        # print(class_names)
+        return class_names
 
-# Give the configuration and weight files for the model and load the network
-# using them.
-net = cv2.dnn.readNetFromDarknet(args.model_cfg, args.model_weights)
-net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+    def _get_anchors(self):
+        anchors_path = os.path.expanduser(self.anchors_path)
+        with open(anchors_path) as f:
+            anchors = f.readline()
+        anchors = [float(x) for x in anchors.split(',')]
+        return np.array(anchors).reshape(-1, 2)
 
+    def _generate(self):
+        model_path = os.path.expanduser(self.model_path)
+        assert model_path.endswith('.h5'), 'Keras model or weights must be a .h5 file'
 
-def _main():
-    wind_name = 'face detection using YOLOv3'
-    cv2.namedWindow(wind_name, cv2.WINDOW_NORMAL)
+        # Load model, or construct model and load weights
+        num_anchors = len(self.anchors)
+        num_classes = len(self.class_names)
+        try:
+            self.yolo_model = load_model(model_path, compile=False)
+        except:
+            # make sure model, anchors and classes match
+            self.yolo_model.load_weights(self.model_path)
+        else:
+            assert self.yolo_model.layers[-1].output_shape[-1] == \
+                num_anchors / len(self.yolo_model.output) * (num_classes + 5), \
+                'Mismatch between model and given anchor and class sizes'
 
-    output_file = ''
+        # print('[i] ==> {} model, anchors, and classes loaded.'.format(model_path))
 
-    if args.image:
-        if not os.path.isfile(args.image):
-            print("[!] ==> Input image file {} doesn't exist".format(args.image))
-            sys.exit(1)
-        cap = cv2.VideoCapture(args.image)
-        output_file = args.image[:-4].rsplit('/')[-1] + '_yoloface.jpg'
-    elif args.video:
-        if not os.path.isfile(args.video):
-            print("[!] ==> Input video file {} doesn't exist".format(args.video))
-            sys.exit(1)
-        cap = cv2.VideoCapture(args.video)
-        output_file = args.video[:-4].rsplit('/')[-1] + '_yoloface.avi'
-    else:
-        # Get data from the camera
-        cap = cv2.VideoCapture(args.src)
+        # Generate colors for drawing bounding boxes
+        hsv_tuples = [(x / len(self.class_names), 1., 1.)
+                      for x in range(len(self.class_names))]
+        self.colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
+        self.colors = list(
+            map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)),
+                self.colors))
 
-    # Get the video writer initialized to save the output video
-    if not args.image:
-        video_writer = cv2.VideoWriter(os.path.join(args.output_dir, output_file),
-                                       cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'),
-                                       cap.get(cv2.CAP_PROP_FPS), (
-                                           round(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                                           round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
+        # Shuffle colors to decorrelate adjacent classes.
+        np.random.seed(102)
+        np.random.shuffle(self.colors)
+        np.random.seed(None)
 
-    while True:
+        # Generate output tensor targets for filtered bounding boxes.
+        self.input_image_shape = K.placeholder(shape=(2,))
+        boxes, scores, classes = eval(self.yolo_model.output, self.anchors,
+                                           len(self.class_names),
+                                           self.input_image_shape,
+                                           score_threshold=self.args.score,
+                                           iou_threshold=self.args.iou)
+        return boxes, scores, classes
 
-        has_frame, frame = cap.read()
+    def letterbox_image(self, image, size):
+        """Resize image with unchanged aspect ratio using padding"""
+        img_width, img_height = image.size
+        w, h = size
+        scale = min(w / img_width, h / img_height)
+        nw = int(img_width * scale)
+        nh = int(img_height * scale)
 
-        # Stop the program if reached end of video
-        if not has_frame:
-            print('[i] ==> Done processing!!!')
-            print('[i] ==> Output file is stored at', os.path.join(args.output_dir, output_file))
-            cv2.waitKey(1000)
-            break
+        image = image.resize((nw, nh), Image.BICUBIC)
+        new_image = Image.new('RGB', size, (128, 128, 128))
+        new_image.paste(image, ((w - nw) // 2, (h - nh) // 2))
+        return new_image
+
+    def detect_image(self, frame):
+        image = Image.fromarray(frame.astype('uint8'), 'RGB')
+        if self.model_image_size != (None, None):
+            assert self.model_image_size[0] % 32 == 0, 'Multiples of 32 required'
+            assert self.model_image_size[1] % 32 == 0, 'Multiples of 32 required'
+            boxed_image = self.letterbox_image(
+                image,
+                tuple(reversed(self.model_image_size))
+            )
+        else:
+            new_image_size = (image.width - (image.width % 32),
+                              image.height - (image.height % 32))
+            boxed_image = self.letterbox_image(image, new_image_size)
+        image_data = np.array(boxed_image, dtype='float32')
+
+        image_data /= 255.
+        # Add batch dimension
+        image_data = np.expand_dims(image_data, 0)
+
+        out_boxes, out_scores, out_classes = self.sess.run(
+            [self.boxes, self.scores, self.classes],
+            feed_dict={
+                self.yolo_model.input: image_data,
+                self.input_image_shape: [image.size[1], image.size[0]],
+                K.learning_phase(): 0
+            })
+
+        thickness = (image.size[0] + image.size[1]) // 400
+
+        found = False
+        for i, c in reversed(list(enumerate(out_classes))):
+            predicted_class = self.class_names[c]
+            box = out_boxes[i]
+            score = out_scores[i]
+
+            # text = '{} {:.2f}'.format(predicted_class, score)
+            # draw = ImageDraw.Draw(image)
+
+            top, left, bottom, right = box
+            top = max(0, np.floor(top + 0.5).astype('int32'))
+            left = max(0, np.floor(left + 0.5).astype('int32'))
+            bottom = min(image.size[1], np.floor(bottom + 0.5).astype('int32'))
+            right = min(image.size[0], np.floor(right + 0.5).astype('int32'))
+
+            # print(text, (left, top), (right, bottom))
+            found = True
+            cv2.rectangle(frame, (left, top), (right, bottom), self.color, 2)
+
+            # for thk in range(thickness):
+            #     draw.rectangle(
+            #         [left + thk, top + thk, right - thk, bottom - thk],
+            #         outline=(51, 178, 255))
+            # del draw
+
+        return image, out_boxes, found
+
+    def close_session(self):
+        self.sess.close()
+
+    def draw_boxes(self, frame):
+        _, _, found = self.detect_image(frame)
+        return found
+
+    def close(self):
+        self.close_session()
+
+class Yoloface_CPU(Yoloface_Model):
+    devices = ['CPU']
+
+    def __init__(self, args):
+        args.model_weights = 'models/yoloface/model-weights/yoloface.weights'
+        super().__init__(args)
+        # Give the configuration and weight files for the model and load the network
+        # using them.
+        net = cv2.dnn.readNetFromDarknet(args.model_cfg, args.model_weights)
+        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        self.net = net
+
+    def draw_boxes(self, frame):
+        net = self.net
 
         # Create a 4D blob from a frame.
         blob = cv2.dnn.blobFromImage(frame, 1 / 255, (IMG_WIDTH, IMG_HEIGHT),
@@ -117,39 +221,22 @@ def _main():
         outs = net.forward(get_outputs_names(net))
 
         # Remove the bounding boxes with low confidence
-        faces = post_process(frame, outs, CONF_THRESHOLD, NMS_THRESHOLD)
-        print('[i] ==> # detected faces: {}'.format(len(faces)))
-        print('#' * 60)
+        boxes = post_process(frame, outs, CONF_THRESHOLD, NMS_THRESHOLD)
+
+        # return: is this array of bounding-boxes NOT empty?
+        return bool(boxes)
 
         # initialize the set of information we'll displaying on the frame
-        info = [
-            ('number of faces detected', '{}'.format(len(faces)))
-        ]
-
-        for (i, (txt, val)) in enumerate(info):
-            text = '{}: {}'.format(txt, val)
-            cv2.putText(frame, text, (10, (i * 20) + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_RED, 2)
-
-        # Save the output video to file
-        if args.image:
-            cv2.imwrite(os.path.join(args.output_dir, output_file), frame.astype(np.uint8))
-        else:
-            video_writer.write(frame.astype(np.uint8))
-
-        cv2.imshow(wind_name, frame)
-
-        key = cv2.waitKey(1)
-        if key == 27 or key == ord('q'):
-            print('[i] ==> Interrupted by user!')
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-
-    print('==> All done!')
-    print('***********************************************************')
+        # info = [('number of faces detected', '{}'.format(len(faces)))]
+        # for (i, (txt, val)) in enumerate(info):
+        #     text = '{}: {}'.format(txt, val)
+        #     cv2.putText(frame, text, (10, (i * 20) + 20),
+        #                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_RED, 2)
 
 
-if __name__ == '__main__':
-    _main()
+def yoloface(args):
+    if args.device == 'CPU':
+        return Yoloface_CPU(args)
+    elif args.device == 'GPU':
+        return Yoloface_GPU(args)
+yoloface.devices = ['CPU', 'GPU']

@@ -90,19 +90,14 @@ def post_process(frame, outs, conf_threshold, nms_threshold):
 
     # Perform non maximum suppression to eliminate redundant
     # overlapping boxes with lower confidences.
-    indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold,
-                               nms_threshold)
+    indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, nms_threshold)
 
     for i in indices:
         i = i[0]
         box = boxes[i]
-        left = box[0]
-        top = box[1]
-        width = box[2]
-        height = box[3]
+        left, top, width, height = box
         final_boxes.append(box)
-        draw_predict(frame, confidences[i], left, top, left + width,
-                     top + height)
+        draw_predict(frame, confidences[i], left, top, left + width, top + height)
     return final_boxes
 
 
