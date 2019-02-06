@@ -128,7 +128,7 @@ class Yoloface_GPU(Yoloface_Model):
         new_image.paste(image, ((w - nw) // 2, (h - nh) // 2))
         return new_image
 
-    def detect_image(self, frame):
+    def get_bboxes(self, frame):
         image = Image.fromarray(frame.astype('uint8'), 'RGB')
         if self.model_image_size != (None, None):
             assert self.model_image_size[0] % 32 == 0, 'Multiples of 32 required'
@@ -155,16 +155,12 @@ class Yoloface_GPU(Yoloface_Model):
                 K.learning_phase(): 0
             })
 
-        thickness = (image.size[0] + image.size[1]) // 400
+        # e52e003d - bbox thickness, predicted class
 
-        found = False
+        bboxes = []
         for i, c in reversed(list(enumerate(out_classes))):
-            predicted_class = self.class_names[c]
             box = out_boxes[i]
             score = out_scores[i]
-
-            # text = '{} {:.2f}'.format(predicted_class, score)
-            # draw = ImageDraw.Draw(image)
 
             top, left, bottom, right = box
             top = max(0, np.floor(top + 0.5).astype('int32'))
@@ -172,24 +168,15 @@ class Yoloface_GPU(Yoloface_Model):
             bottom = min(image.size[1], np.floor(bottom + 0.5).astype('int32'))
             right = min(image.size[0], np.floor(right + 0.5).astype('int32'))
 
-            # print(text, (left, top), (right, bottom))
-            found = True
-            cv2.rectangle(frame, (left, top), (right, bottom), self.color, 2)
-
-            # for thk in range(thickness):
-            #     draw.rectangle(
-            #         [left + thk, top + thk, right - thk, bottom - thk],
-            #         outline=(51, 178, 255))
-            # del draw
-
-        return image, out_boxes, found
+            bboxes.append({
+                'box': (left, top, right, bottom),
+                'score': score,
+                'class': 'face'
+            })
+        return bboxes
 
     def close_session(self):
         self.sess.close()
-
-    def draw_boxes(self, frame):
-        _, _, found = self.detect_image(frame)
-        return found
 
     def close(self):
         self.close_session()
@@ -207,12 +194,11 @@ class Yoloface_CPU(Yoloface_Model):
         net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
         self.net = net
 
-    def draw_boxes(self, frame):
+    def get_bboxes(self, frame):
         net = self.net
 
         # Create a 4D blob from a frame.
-        blob = cv2.dnn.blobFromImage(frame, 1 / 255, (IMG_WIDTH, IMG_HEIGHT),
-                                     [0, 0, 0], 1, crop=False)
+        blob = cv2.dnn.blobFromImage(frame, 1 / 255, (IMG_WIDTH, IMG_HEIGHT), [0, 0, 0], 1, crop=False)
 
         # Sets the input to the network
         net.setInput(blob)
@@ -221,17 +207,7 @@ class Yoloface_CPU(Yoloface_Model):
         outs = net.forward(get_outputs_names(net))
 
         # Remove the bounding boxes with low confidence
-        boxes = post_process(frame, outs, CONF_THRESHOLD, NMS_THRESHOLD)
-
-        # return: is this array of bounding-boxes NOT empty?
-        return bool(boxes)
-
-        # initialize the set of information we'll displaying on the frame
-        # info = [('number of faces detected', '{}'.format(len(faces)))]
-        # for (i, (txt, val)) in enumerate(info):
-        #     text = '{}: {}'.format(txt, val)
-        #     cv2.putText(frame, text, (10, (i * 20) + 20),
-        #                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_RED, 2)
+        return post_process(frame, outs, CONF_THRESHOLD, NMS_THRESHOLD)
 
 
 def yoloface(args):

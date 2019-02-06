@@ -48,21 +48,6 @@ def get_outputs_names(net):
     return [layers_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
 
 
-# Draw the predicted bounding box
-def draw_predict(frame, conf, left, top, right, bottom):
-    # Draw a bounding box.
-    cv2.rectangle(frame, (left, top), (right, bottom), COLOR_YELLOW, 2)
-
-    text = '{:.2f}'.format(conf)
-
-    # Display the label at the top of the bounding box
-    label_size, base_line = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-
-    top = max(top, label_size[1])
-    cv2.putText(frame, text, (left, top - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
-                COLOR_WHITE, 1)
-
-
 def post_process(frame, outs, conf_threshold, nms_threshold):
     frame_height = frame.shape[0]
     frame_width = frame.shape[1]
@@ -72,7 +57,6 @@ def post_process(frame, outs, conf_threshold, nms_threshold):
     # class with the highest score.
     confidences = []
     boxes = []
-    final_boxes = []
     for out in outs:
         for detection in out:
             scores = detection[5:]
@@ -92,13 +76,17 @@ def post_process(frame, outs, conf_threshold, nms_threshold):
     # overlapping boxes with lower confidences.
     indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, nms_threshold)
 
+    bboxes = []
     for i in indices:
         i = i[0]
         box = boxes[i]
         left, top, width, height = box
-        final_boxes.append(box)
-        draw_predict(frame, confidences[i], left, top, left + width, top + height)
-    return final_boxes
+        bboxes.append({
+            'box': (left, top, left+width, top+height),
+            'score': confidences[i],
+            'class': 'face'
+        })
+    return bboxes
 
 
 class FPS:
